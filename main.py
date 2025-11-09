@@ -1,12 +1,13 @@
 import os
-
 import pandas as pd
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-from ml.data import apply_label, process_data
+# Assuming process_data and inference are in ml.data and ml.model respectively
+from ml.data import process_data
 from ml.model import inference, load_model
 
+#  Data Model Definition 
 # DO NOT MODIFY
 class Data(BaseModel):
     age: int = Field(..., example=37)
@@ -26,33 +27,63 @@ class Data(BaseModel):
     hours_per_week: int = Field(..., example=40, alias="hours-per-week")
     native_country: str = Field(..., example="United-States", alias="native-country")
 
-path = None # TODO: enter the path for the saved encoder 
-encoder = load_model(path)
+    # This allows the model to be created from a dictionary with hyphenated keys
+    class Config:
+        allow_population_by_field_name = True
 
-path = None # TODO: enter the path for the saved model 
-model = load_model(path)
 
-# TODO: create a RESTful API using FastAPI
-app = None # your code here
+#  Load Model and Encoder 
+# This part of the code runs once when the script is first loaded.
+try:
+    # Path for the saved encoder
+    encoder_path = "model/encoder.pkl"
+    encoder = load_model(encoder_path)
 
-# TODO: create a GET on the root giving a welcome message
+    # Path for the saved label binarizer
+    lb_path = "model/lb.pkl"
+    lb = load_model(lb_path)
+
+    # Path for the saved model
+    model_path = "model/model.pkl"
+    model = load_model(model_path)
+    print("Model, encoder, and label binarizer loaded successfully.")
+
+except FileNotFoundError:
+    print("Error: Model or processor file not found. Please run train_model.py first.")
+    # Exit if files are not found, as the API cannot function.
+    exit()
+
+
+#  API Creation 
+# Create a RESTful API using FastAPI
+app = FastAPI(
+    title="Census Income Prediction API",
+    description="An API to predict whether an individual's income exceeds $50K.",
+    version="1.0.0",
+)
+
+
+#  API Endpoints 
+# Create a GET on the root giving a welcome message
 @app.get("/")
 async def get_root():
-    """ Say hello!"""
-    # your code here
-    pass
+    """ Say hello and provide basic API information. """
+    return {"message": "Welcome to the Census Income Prediction API!"}
 
 
-# TODO: create a POST on a different path that does model inference
-@app.post("/data/")
+# Create a POST on a different path that does model inference
+# The path is changed to /predict for clarity, as is common practice.
+@app.post("/predict")
 async def post_inference(data: Data):
+    """
+    Receives census data for an individual and returns a prediction for their income level.
+    """
     # DO NOT MODIFY: turn the Pydantic model into a dict.
-    data_dict = data.dict()
-    # DO NOT MODIFY: clean up the dict to turn it into a Pandas DataFrame.
-    # The data has names with hyphens and Python does not allow those as variable names.
-    # Here it uses the functionality of FastAPI/Pydantic/etc to deal with this.
-    data = {k.replace("_", "-"): [v] for k, v in data_dict.items()}
-    data = pd.DataFrame.from_dict(data)
+    # The `by_alias=True` is important to get the hyphenated keys.
+    data_dict = data.dict(by_alias=True)
+    
+    # DO NOT MODIFY: turn the dict into a Pandas DataFrame.
+    input_df = pd.DataFrame([data_dict])
 
     cat_features = [
         "workclass",
@@ -64,11 +95,21 @@ async def post_inference(data: Data):
         "sex",
         "native-country",
     ]
+
+    # Use the process_data function to prepare the data for inference
     data_processed, _, _, _ = process_data(
-        # your code here
-        # use data as data input
-        # use training = False
-        # do not need to pass lb as input
+        input_df,
+        categorical_features=cat_features,
+        label=None, # No label column in inference data
+        training=False,
+        encoder=encoder,
+        lb=lb,
     )
-    _inference = None # your code here to predict the result using data_processed
-    return {"result": apply_label(_inference)}
+    
+    # Run the inference to get a prediction (e.g., [0] or [1])
+    prediction_raw = inference(model, data_processed)
+    
+    # Convert the raw prediction back to the original label (e.g., "<=50K")
+    prediction_label = lb.inverse_transform(prediction_raw)[0]
+    
+    return {"prediction": prediction_label}
